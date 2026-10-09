@@ -1,0 +1,213 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  TEACHER
+  STUDENT
+}
+
+enum QuizStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum QuestionType {
+  MCQ_SINGLE
+  MCQ_MULTIPLE
+  TRUE_FALSE
+  NUMERICAL
+  SHORT_ANSWER
+  DESCRIPTIVE
+}
+
+enum DifficultyLevel {
+  EASY
+  MEDIUM
+  HARD
+  MIXED
+}
+
+enum CognitiveLevel {
+  REMEMBER
+  UNDERSTAND
+  APPLY
+  ANALYZE
+  EVALUATE
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  AUTO_SUBMITTED
+  EXPIRED
+}
+
+enum ScoreStrategy {
+  BEST
+  LATEST
+  AVERAGE
+}
+
+model User {
+  id             String          @id @default(cuid())
+  name           String
+  email          String          @unique
+  passwordHash   String
+  role           Role
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  teacherProfile TeacherProfile?
+  studentProfile StudentProfile?
+  quizzes        Quiz[]          @relation("TeacherQuizzes")
+  attempts       QuizAttempt[]
+}
+
+model TeacherProfile {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  institution String?
+  designation String?
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model StudentProfile {
+  id         String  @id @default(cuid())
+  userId     String  @unique
+  rollNumber String  @unique
+  department String?
+  year       String?
+  className  String?
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Quiz {
+  id              String          @id @default(cuid())
+  teacherId       String
+  title           String
+  subject         String
+  topic           String
+  description     String?
+  totalMarks      Int             @default(0)
+  durationMinutes Int
+  attemptsAllowed Int             @default(1)
+  scoreStrategy   ScoreStrategy   @default(BEST)
+  status          QuizStatus      @default(DRAFT)
+  quizCode        String?         @unique
+  passMarkPercent Int             @default(40)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  teacher         User            @relation("TeacherQuizzes", fields: [teacherId], references: [id])
+  questions       Question[]
+  attempts        QuizAttempt[]
+  materials       UploadedMaterial[]
+  generationLogs  AIGenerationLog[]
+}
+
+model Question {
+  id             String          @id @default(cuid())
+  quizId         String
+  type           QuestionType
+  text           String
+  marks          Int             @default(1)
+  difficulty     DifficultyLevel @default(MEDIUM)
+  cognitiveLevel CognitiveLevel?
+  topicTag       String?
+  explanation    String?
+  orderIndex     Int             @default(0)
+  isApproved     Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  quiz           Quiz            @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  options        QuestionOption[]
+  meta           QuestionMeta?
+  responses      StudentResponse[]
+}
+
+model QuestionOption {
+  id         String   @id @default(cuid())
+  questionId String
+  text       String
+  isCorrect  Boolean  @default(false)
+  orderIndex Int      @default(0)
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+}
+
+model QuestionMeta {
+  id             String   @id @default(cuid())
+  questionId     String   @unique
+  correctAnswer  String?  // for numerical: exact value as string
+  tolerance      Float?   // for numerical: ±tolerance
+  modelAnswer    String?  // for short answer / descriptive
+  rubric         String?  // for descriptive: scoring criteria
+  question       Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+}
+
+model QuizAttempt {
+  id              String        @id @default(cuid())
+  quizId          String
+  studentId       String
+  attemptNumber   Int           @default(1)
+  startedAt       DateTime      @default(now())
+  expiresAt       DateTime
+  submittedAt     DateTime?
+  timeTakenSeconds Int?
+  status          AttemptStatus @default(IN_PROGRESS)
+  totalScore      Float         @default(0)
+  isFinal         Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  quiz            Quiz          @relation(fields: [quizId], references: [id])
+  student         User          @relation(fields: [studentId], references: [id])
+  responses       StudentResponse[]
+
+  @@unique([quizId, studentId, attemptNumber])
+}
+
+model StudentResponse {
+  id                   String      @id @default(cuid())
+  attemptId            String
+  questionId           String
+  selectedOptions      String[]    // option IDs for MCQ
+  answerText           String?     // for short answer / descriptive / numerical
+  marksAwarded         Float       @default(0)
+  isCorrect            Boolean?
+  isSkipped            Boolean     @default(false)
+  aiScore              Float?
+  aiReasoning          String?
+  aiConfidence         Float?
+  teacherOverrideScore Float?
+  teacherOverrideNote  String?
+  gradedAt             DateTime?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  attempt              QuizAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question             Question    @relation(fields: [questionId], references: [id])
+}
+
+model UploadedMaterial {
+  id            String   @id @default(cuid())
+  quizId        String
+  teacherId     String
+  fileName      String
+  fileType      String
+  fileUrl       String
+  extractedText String?
+  uploadedAt    DateTime @default(now())
+  quiz          Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+}
+
+model AIGenerationLog {
+  id          String   @id @default(cuid())
+  quizId      String
+  provider    String   // "claude" or "gemini"
+  promptUsed  String
+  rawResponse String?
+  status      String   // "success" | "failed" | "fallback"
+  createdAt   DateTime @default(now())
+  quiz        Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+}
