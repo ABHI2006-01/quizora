@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { clusterStudentsWithML } from "@/lib/ml";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -25,7 +26,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       where: {
         quizId,
         status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] },
-        isFinal: true // Only count the final scores per student according to strategy
+        isFinal: true
       },
       include: {
         student: {
@@ -45,7 +46,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           lowestScore: 0,
           passPercentage: 0
         },
-        students: []
+        students: [],
+        clusters: []
       });
     }
 
@@ -54,7 +56,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const passCount = scores.filter(s => (s / quiz.totalMarks) * 100 >= quiz.passMarkPercent).length;
 
     const stats = {
-      totalStudents: attempts.length, // representing submitted final attempts
+      totalStudents: attempts.length,
       averageScore,
       highestScore: Math.max(...scores),
       lowestScore: Math.min(...scores),
@@ -73,7 +75,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       submittedAt: a.submittedAt
     }));
 
-    return NextResponse.json({ success: true, stats, students });
+    // Call ML Microservice to cluster students!
+    const mlInput = students.map(s => ({
+       student_id: s.studentId,
+       name: s.name,
+       scores: [s.percentage], // We just supply the current quiz percentage for clustering logic
+       avg_time_taken: s.timeTakenSeconds || 0
+    }));
+
+    const clusters = await clusterStudentsWithML(mlInput);
+
+    return NextResponse.json({ success: true, stats, students, clusters });
 
   } catch (error: any) {
     console.error("Teacher Performance API Error:", error);
