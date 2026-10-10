@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { isSubmissionValid } from "@/lib/timer";
 import { gradeAttempt } from "@/lib/grading/auto";
+import { evaluateAttemptSubjective } from "@/lib/grading/subjective";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -32,51 +33,43 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
 
     const submittedAt = new Date();
-
-    // Verify time constraint (server-side check)
-    // isSubmissionValid includes a 10 second grace period
     const isValid = isSubmissionValid(submittedAt, attempt.expiresAt);
     if (!autoSubmit && !isValid) {
-       // If it's expired and not an auto-submit triggered by the client timer, we still accept it but flag as AUTO_SUBMITTED
        console.warn(`Late submission for attempt ${attemptId}. Forcing AUTO_SUBMITTED.`);
     }
 
     const finalStatus = autoSubmit ? "AUTO_SUBMITTED" : (!isValid ? "AUTO_SUBMITTED" : "SUBMITTED");
-
-    // Calculate time taken
     const timeTakenSeconds = Math.max(0, Math.floor((submittedAt.getTime() - attempt.startedAt.getTime()) / 1000));
 
-    // Save final responses
     if (responses && Array.isArray(responses)) {
       for (const r of responses) {
         const existingResponse = await prisma.studentResponse.findFirst({
           where: { attemptId: attempt.id, questionId: r.questionId }
         });
 
+        const data = {
+          selectedOptions: r.selectedOptions || [],
+          answerText: r.answerText || null,
+          isSkipped: r.isSkipped || false
+        };
+
         if (existingResponse) {
            await prisma.studentResponse.update({
              where: { id: existingResponse.id },
-             data: {
-               selectedOptions: r.selectedOptions || [],
-               answerText: r.answerText || null,
-               isSkipped: r.isSkipped || false
-             }
+             data
            });
         } else {
            await prisma.studentResponse.create({
              data: {
                attemptId: attempt.id,
                questionId: r.questionId,
-               selectedOptions: r.selectedOptions || [],
-               answerText: r.answerText || null,
-               isSkipped: r.isSkipped || false
+               ...data
              }
            });
         }
       }
     }
 
-    // Mark as submitted
     await prisma.quizAttempt.update({
       where: { id: attempt.id },
       data: {
@@ -86,10 +79,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       }
     });
 
-    // Fire-and-forget background grading for auto-gradable questions
-    gradeAttempt(attempt.id).catch(err => {
-      console.error(`Failed to auto-grade attempt ${attempt.id}:`, err);
-    });
+    // Fire-and-forget background grading pipeline
+    (async () => {
+      try {
+        await gradeAttempt(attempt.id);
+        await evaluateAttemptSubjective(attempt.id);
+      } catch (err) {
+        console.error(`Grading pipeline failed for attempt ${attempt.id}:`, err);
+      }
+    })();
 
     return NextResponse.json({ success: true, attemptId: attempt.id });
 

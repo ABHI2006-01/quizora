@@ -140,5 +140,48 @@ export async function gradeAttempt(attemptId: string): Promise<number> {
     });
   }
 
+  await prisma.quizAttempt.update({ where: { id: attemptId }, data: { totalScore } });
+  await updateFinalScore(attempt.quizId, attempt.studentId);
+
   return totalScore;
+}
+
+/**
+ * Calculates and updates the attempt score and marks the final attempt based on Score Strategy.
+ */
+export async function updateFinalScore(quizId: string, studentId: string) {
+  const quiz = await prisma.quiz.findUnique({ where: { id: quizId } });
+  if (!quiz) return;
+
+  const attempts = await prisma.quizAttempt.findMany({
+    where: { quizId, studentId, status: { in: ["SUBMITTED", "AUTO_SUBMITTED"] } },
+    orderBy: { startedAt: "desc" }
+  });
+
+  if (attempts.length === 0) return;
+
+  // Unmark all attempts as final
+  await prisma.quizAttempt.updateMany({
+    where: { quizId, studentId },
+    data: { isFinal: false }
+  });
+
+  let finalAttemptId = attempts[0].id; // LATEST default
+
+  if (quiz.scoreStrategy === "BEST") {
+    const bestAttempt = [...attempts].sort((a, b) => b.totalScore - a.totalScore)[0];
+    finalAttemptId = bestAttempt.id;
+  }
+
+  if (quiz.scoreStrategy === "AVERAGE") {
+    // AVERAGE strategy: we mark the latest attempt but its score represents the average
+    // or we mark all as non-final but compute average dynamically. 
+    // The implementation plan says "mark the relevant attempt as isFinal = true". Let's stick with LATEST to hold the flag.
+    finalAttemptId = attempts[0].id;
+  }
+
+  await prisma.quizAttempt.update({
+    where: { id: finalAttemptId },
+    data: { isFinal: true }
+  });
 }
